@@ -1,0 +1,357 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Assessment;
+use App\Models\Attendance;
+use App\Models\User;
+use App\Models\PrakerinProfile;
+use App\Models\Activity;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\DB;
+
+class AdminController extends Controller
+{
+    /**
+     * Admin Dashboard - View all Prakerin students.
+     */
+    public function dashboard(Request $request)
+    {
+        $query = User::where('role', 'prakerin')->with('prakerinProfile');
+
+        // Search functionality
+        if ($request->has('search') && $request->search != '') {
+            $search = $request->search;
+            $query->where(function($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('email', 'like', "%{$search}%")
+                  ->orWhereHas('prakerinProfile', function($qp) use ($search) {
+                      $qp->where('nisn', 'like', "%{$search}%")
+                         ->orWhere('school', 'like', "%{$search}%")
+                         ->orWhere('department', 'like', "%{$search}%");
+                  });
+            });
+        }
+
+        // Filter functionality
+        if ($request->has('status') && $request->status != '') {
+            $status = $request->status;
+            $query->whereHas('prakerinProfile', function($q) use ($status) {
+                $q->where('status', $status);
+            });
+        }
+
+        $students = $query->orderBy('created_at', 'desc')
+            ->paginate(10)
+            ->withQueryString();
+
+        $recentActivities = Activity::with('user:id,name')
+            ->orderBy('date', 'desc')
+            ->orderBy('created_at', 'desc')
+            ->take(8)
+            ->get();
+
+        $recentActivitiesByUser = [];
+        foreach ($students as $student) {
+            $recentActivitiesByUser[$student->id] = Activity::where('user_id', $student->id)
+                ->orderBy('date', 'desc')
+                ->orderBy('created_at', 'desc')
+                ->take(2)
+                ->get();
+        }
+
+        // Calculate statistics
+        $stats = [
+            'total' => User::where('role', 'prakerin')->count(),
+            'pending' => PrakerinProfile::where('status', 'pending')->count(),
+            'approved' => PrakerinProfile::where('status', 'approved')->count(),
+            'rejected' => PrakerinProfile::where('status', 'rejected')->count(),
+        ];
+
+        return view('admin.dashboard', compact('students', 'stats', 'recentActivities', 'recentActivitiesByUser'));
+    }
+
+    /**
+     * Validate/Approve/Reject Prakerin student.
+     */
+    public function validatePrakerin(Request $request, $id)
+    {
+        $request->validate([
+            'status' => ['required', 'in:approved,rejected,pending']
+        ]);
+
+        $profile = PrakerinProfile::where('user_id', $id)->firstOrFail();
+        $profile->status = $request->status;
+        $profile->save();
+
+        $statusLabel = $request->status == 'approved' ? 'Disetujui' : ($request->status == 'rejected' ? 'Ditolak' : 'Ditunda');
+
+        return back()->with('success', "Status data prakerin {$profile->user->name} berhasil diperbarui menjadi {$statusLabel}.");
+    }
+
+    /**
+     * Show form to create new Prakerin student.
+     */
+    public function create()
+    {
+        return view('admin.prakerin.create');
+    }
+
+    /**
+     * Store newly created Prakerin student.
+     */
+    public function store(Request $request)
+    {
+        $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'string', 'email', 'max:255', 'unique:users'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
+            'nisn' => ['required', 'string', 'max:20'],
+            'school' => ['required', 'string', 'max:255'],
+            'department' => ['required', 'string', 'max:255'],
+            'start_date' => ['required', 'date'],
+            'end_date' => ['required', 'date'],
+            'status' => ['required', 'in:pending,approved,rejected'],
+        ], [
+            'password.min' => 'Password harus minimal 8 karakter.',
+            'password.confirmed' => 'Konfirmasi password tidak cocok.',
+        ]);
+
+        DB::beginTransaction();
+        try {
+            $user = User::create([
+                'name' => $request->name,
+                'email' => $request->email,
+                'password' => Hash::make($request->password),
+                'role' => 'prakerin',
+            ]);
+
+            PrakerinProfile::create([
+                'user_id' => $user->id,
+                'nisn' => $request->nisn,
+                'school' => $request->school,
+                'department' => $request->department,
+                'start_date' => $request->start_date,
+                'end_date' => $request->end_date,
+                'status' => $request->status,
+            ]);
+
+            DB::commit();
+
+            return redirect()->route('admin.dashboard')->with('success', 'Data peserta Prakerin baru berhasil ditambahkan.');
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return back()->withErrors(['error' => 'Gagal menambahkan data peserta.'])->withInput();
+        }
+    }
+
+    /**
+     * Show form to edit Prakerin student.
+     */
+    public function edit($id)
+    {
+        $student = User::where('role', 'prakerin')->with('prakerinProfile')->findOrFail($id);
+        return view('admin.prakerin.edit', compact('student'));
+    }
+
+    /**
+     * Update Prakerin student.
+     */
+    public function update(Request $request, $id)
+    {
+        $user = User::where('role', 'prakerin')->findOrFail($id);
+
+        $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'string', 'email', 'max:255', 'unique:users,email,' . $user->id],
+            'password' => ['nullable', 'string', 'min:8'],
+            'nisn' => ['required', 'string', 'max:20'],
+            'school' => ['required', 'string', 'max:255'],
+            'department' => ['required', 'string', 'max:255'],
+            'start_date' => ['required', 'date'],
+            'end_date' => ['required', 'date'],
+            'status' => ['required', 'in:pending,approved,rejected'],
+        ]);
+
+        DB::beginTransaction();
+        try {
+            $userData = [
+                'name' => $request->name,
+                'email' => $request->email,
+            ];
+
+            if ($request->filled('password')) {
+                $userData['password'] = Hash::make($request->password);
+            }
+
+            $user->update($userData);
+
+            $profile = PrakerinProfile::where('user_id', $user->id)->firstOrFail();
+            $profile->update([
+                'nisn' => $request->nisn,
+                'school' => $request->school,
+                'department' => $request->department,
+                'start_date' => $request->start_date,
+                'end_date' => $request->end_date,
+                'status' => $request->status,
+            ]);
+
+            DB::commit();
+
+            return redirect()->route('admin.dashboard')->with('success', 'Data peserta Prakerin berhasil diperbarui.');
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return back()->withErrors(['error' => 'Gagal memperbarui data peserta.'])->withInput();
+        }
+    }
+
+    /**
+     * Delete Prakerin student.
+     */
+    public function destroy($id)
+    {
+        $user = User::where('role', 'prakerin')->findOrFail($id);
+        $user->delete(); // Cascades deletes profile and activities
+
+        return redirect()->route('admin.dashboard')->with('success', 'Data peserta Prakerin berhasil dihapus.');
+    }
+
+    /**
+     * View daily activities of a specific Prakerin student.
+     */
+    public function activities($id)
+    {
+        $student = User::where('role', 'prakerin')->with('prakerinProfile')->findOrFail($id);
+        $activities = Activity::with('attachments')->where('user_id', $id)
+            ->orderBy('date', 'desc')
+            ->orderBy('submitted_at', 'desc')
+            ->orderBy('created_at', 'desc')
+            ->paginate(5);
+
+        return view('admin.prakerin.activities', compact('student', 'activities'));
+    }
+
+    /**
+     * Show assessment page for a prakerin student.
+     */
+    public function assessment($id)
+    {
+        $student = User::where('role', 'prakerin')->with('prakerinProfile')->findOrFail($id);
+        $assessment = Assessment::where('user_id', $id)->first();
+
+        return view('admin.prakerin.assessment', compact('student', 'assessment'));
+    }
+
+    /**
+     * Store or update assessment for a prakerin student.
+     */
+    public function storeAssessment(Request $request, $id)
+    {
+        $student = User::where('role', 'prakerin')->findOrFail($id);
+
+        $request->validate([
+            'discipline_score' => ['nullable', 'integer', 'between:0,100'],
+            'attitude_score' => ['nullable', 'integer', 'between:0,100'],
+            'technical_scores' => ['nullable', 'array'],
+            'technical_scores.*' => ['nullable', 'integer', 'between:0,100'],
+            'non_technical_scores' => ['nullable', 'array'],
+            'non_technical_scores.*' => ['nullable', 'integer', 'between:0,100'],
+            'skill_score' => ['nullable', 'integer', 'between:0,100'],
+            'notes' => ['nullable', 'string', 'max:1000'],
+        ], [
+            'discipline_score.between' => 'Nilai kedisiplinan harus antara 0 sampai 100.',
+            'attitude_score.between' => 'Nilai sikap harus antara 0 sampai 100.',
+            'technical_scores.*.between' => 'Setiap nilai aspek teknik harus antara 0 sampai 100.',
+            'non_technical_scores.*.between' => 'Setiap nilai aspek non-teknik harus antara 0 sampai 100.',
+            'skill_score.between' => 'Nilai keterampilan harus antara 0 sampai 100.',
+        ]);
+
+        $technicalScores = $request->input('technical_scores');
+        if (is_array($technicalScores) && count($technicalScores) > 0) {
+            $validScores = array_filter($technicalScores, fn($val) => is_numeric($val));
+            $skillScore = count($validScores) > 0 ? (int) round(array_sum($validScores) / count($validScores)) : (int) ($request->skill_score ?? 0);
+        } else {
+            $skillScore = (int) ($request->skill_score ?? 0);
+        }
+
+        $nonTechnicalScores = $request->input('non_technical_scores');
+        if (is_array($nonTechnicalScores) && count($nonTechnicalScores) > 0) {
+            $validNonTech = array_filter($nonTechnicalScores, fn($val) => is_numeric($val));
+            $attitudeScore = count($validNonTech) > 0 ? (int) round(array_sum($validNonTech) / count($validNonTech)) : (int) ($request->attitude_score ?? 0);
+            $disciplineScore = isset($nonTechnicalScores['discipline']) && is_numeric($nonTechnicalScores['discipline'])
+                ? (int) $nonTechnicalScores['discipline']
+                : (int) ($request->discipline_score ?? $attitudeScore);
+        } else {
+            $disciplineScore = (int) ($request->discipline_score ?? 0);
+            $attitudeScore = (int) ($request->attitude_score ?? 0);
+        }
+
+        Assessment::updateOrCreate(
+            ['user_id' => $student->id],
+            [
+                'discipline_score' => $disciplineScore,
+                'skill_score' => $skillScore,
+                'attitude_score' => $attitudeScore,
+                'technical_scores' => $technicalScores,
+                'non_technical_scores' => $nonTechnicalScores,
+                'notes' => $request->notes,
+            ]
+        );
+
+        return redirect()->route('admin.prakerin.assessment', $student->id)->with('success', 'Penilaian berhasil disimpan.');
+    }
+
+    /**
+     * View all student attendances with filters for Admin.
+     */
+    public function attendances(Request $request)
+    {
+        $query = Attendance::with(['user.prakerinProfile']);
+
+        // Search functionality (student name, email, school)
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->whereHas('user', function($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('email', 'like', "%{$search}%")
+                  ->orWhereHas('prakerinProfile', function($qp) use ($search) {
+                      $qp->where('school', 'like', "%{$search}%")
+                         ->orWhere('department', 'like', "%{$search}%");
+                  });
+            });
+        }
+
+        // Filter by student user_id
+        if ($request->filled('user_id')) {
+            $query->where('user_id', $request->user_id);
+        }
+
+        // Filter by status
+        if ($request->filled('status')) {
+            $query->where('status', $request->status);
+        }
+
+        // Filter by date
+        if ($request->filled('date')) {
+            $query->whereDate('date', $request->date);
+        }
+
+        $attendances = $query->orderBy('date', 'desc')
+            ->orderBy('created_at', 'desc')
+            ->paginate(15)
+            ->withQueryString();
+
+        $students = User::where('role', 'prakerin')->orderBy('name', 'asc')->get();
+
+        $stats = [
+            'total' => Attendance::count(),
+            'present' => Attendance::where('status', 'present')->count(),
+            'sick' => Attendance::whereIn('status', ['sick', 'late'])->count(),
+            'permission' => Attendance::where('status', 'permission')->count(),
+            'absent' => Attendance::where('status', 'absent')->count(),
+        ];
+
+        return view('admin.prakerin.attendances', compact('attendances', 'students', 'stats'));
+    }
+}
