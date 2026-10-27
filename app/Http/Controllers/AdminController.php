@@ -303,6 +303,22 @@ class AdminController extends Controller
     }
 
     /**
+     * Print certificate for a prakerin student.
+     */
+    public function certificate($id)
+    {
+        $student = User::where('role', 'prakerin')->with('prakerinProfile')->findOrFail($id);
+        $assessment = Assessment::where('user_id', $id)->firstOrFail();
+
+        $techAvg = $assessment->skill_score ?? 0;
+        $attitudeAvg = $assessment->attitude_score ?? 0;
+        $discipline = $assessment->discipline_score ?? 0;
+        $finalScore = round(($techAvg + $attitudeAvg + $discipline) / 3);
+
+        return view('admin.prakerin.certificate', compact('student', 'assessment', 'techAvg', 'attitudeAvg', 'discipline', 'finalScore'));
+    }
+
+    /**
      * View all student attendances with filters for Admin.
      */
     public function attendances(Request $request)

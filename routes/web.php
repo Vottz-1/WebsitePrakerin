@@ -41,6 +41,7 @@ Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(fun
     Route::get('/prakerin/{id}/activities', [AdminController::class, 'activities'])->name('prakerin.activities');
     Route::get('/prakerin/{id}/assessment', [AdminController::class, 'assessment'])->name('prakerin.assessment');
     Route::post('/prakerin/{id}/assessment', [AdminController::class, 'storeAssessment'])->name('prakerin.assessment.store');
+    Route::get('/prakerin/{id}/certificate', [AdminController::class, 'certificate'])->name('prakerin.certificate');
 });
 
 // Prakerin Student Panel Routes

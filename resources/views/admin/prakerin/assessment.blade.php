@@ -694,9 +694,16 @@
                     <span class="text-muted small">
                         <i class="fa-solid fa-circle-info text-primary me-1"></i>Pastikan seluruh nilai aspek teknik dan non-teknik sudah terisi dengan benar sebelum menyimpan.
                     </span>
-                    <button type="submit" class="btn btn-gradient-success rounded-3 px-4 py-2.5 fw-semibold shadow-sm">
-                        <i class="fa-solid fa-floppy-disk me-2"></i>Simpan Penilaian
-                    </button>
+                    <div class="d-flex gap-2 flex-wrap">
+                        @if(isset($assessment))
+                            <a href="{{ route('admin.prakerin.certificate', $student->id) }}" target="_blank" class="btn btn-outline-primary rounded-3 px-4 py-2.5 fw-semibold shadow-sm">
+                                <i class="fa-solid fa-print me-2"></i>Cetak Sertifikat
+                            </a>
+                        @endif
+                        <button type="submit" class="btn btn-gradient-success rounded-3 px-4 py-2.5 fw-semibold shadow-sm">
+                            <i class="fa-solid fa-floppy-disk me-2"></i>Simpan Penilaian
+                        </button>
+                    </div>
                 </div>
             </div>
         </form>
